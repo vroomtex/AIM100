@@ -236,10 +236,12 @@ namespace IngameScript
         readonly MyIni _guidanceIni = new MyIni();
         readonly StringBuilder _saveSB = new StringBuilder();
         readonly RaycastHoming _raycastHoming;
+        TargetingComputer _TargetingComputer;
 
 
         enum GuidanceMode : int { BeamRiding = 1, SemiActive = 2, Active = 4, Homing = SemiActive | Active };
-        enum PathType : int { Clear = 0, Ascent = 1, Cruise = 2, Descent = 3}
+        enum PathType : int { Clear = 0, Ascent = 1, Cruise = 2, Descent = 3};
+        enum LauncherType : int { Ground = 0, Air = 1 };
         PID _yawPID = new PID(1, 0, 0, SecondsPerUpdate),
             _pitchPID = new PID(1, 0, 0, SecondsPerUpdate);
         IMyBlockGroup _missileGroup;
@@ -806,7 +808,8 @@ namespace IngameScript
                     _timeSinceLastIngest = 1.0 / 60.0; // IGC messages are always a tick delayed
 
                     _guidanceMode = GuidanceMode.SemiActive;
-
+                    if (_TargetingComputer == null)
+                        _TargetingComputer = new TargetingComputer(_targetPos,_missileReference.GetPosition(),_missileReference,_cruiseHeight, _mainThrusters);
                     _raycastHoming.SetInitialLockParameters(hitPos, _targetVel, offset, _timeSinceLastLock, targetId);
                 }
             }
@@ -1701,39 +1704,7 @@ namespace IngameScript
         // Vector3D origin = _missileReference.TryGetPlanetPosition(out Vector3D planetOrigin);
         // Vector3D upVector = Vector3.Normalize(currentPosition - origin)
         // Vector3D target = (upVector * cruiseHeight) + targetPos?
-        /// <summary>
-        ///  Calculates the newtons needed from the force of the thruster to maintain sub-hypersonic flight.
-        /// </summary>
-        /// <param name="missileVelocity"> </param>
-        /// <returns></returns>
-        double HypersonicCruise(Vector3D missileVelocity)
-        {
-            if (!(_missileReference is IMyShipController))
-                return 0.0;
-
-            double missileThrust = CalculateMissileThrust(_mainThrusters);
-            double missileMass = _missileReference.CalculateShipMass().PhysicalMass;
-            Vector3D planetPosition;
-            _missileReference.TryGetPlanetPosition(out planetPosition);
-
-            if (planetPosition != new Vector3D())
-            {
-                double height;
-                double alt;
-                _missileReference.TryGetPlanetElevation(MyPlanetElevation.Surface, out height);
-                _missileReference.TryGetPlanetElevation(MyPlanetElevation.Sealevel, out alt);
-                double actualSpeed = Math.Sqrt(Math.Pow(missileVelocity.X, 2) + Math.Pow(missileVelocity.Y, 2) + Math.Pow(missileVelocity.Z, 2)); // Relative to 0,0,0 how fast are we going.
-                double cruiseSpeed = 400; // speed to maintain m/s
-                double cruiseThrust = ((0.5 * missileMass * Math.Pow(cruiseSpeed, 2)) - (0.5 * missileMass * Math.Pow(actualSpeed, 2))) / (_timeSinceLastIngest);
-                if (cruiseThrust < 0)
-                    return 0; // cant have negative thrust.
-
-                return cruiseThrust;
-            }
-            else
-                return missileThrust / missileMass;
-
-        }
+       
         public class TargetingComputer
         {
             private IMyShipController _missileController;
@@ -1743,26 +1714,38 @@ namespace IngameScript
             private Vector3D _missileOrient;
             private Vector3D _targetPosition;
             private Vector3D _targetVelocity;
-
-            
+            private double _missileMass;
+            private List<IMyThrust> _thrusters;
+            private double _timeSinceLastIngest;
             private Trajectory _Trajectory;
             
+            
 
+            public TargetingComputer(IMyShipController missileController, List<IMyThrust> mainThrusters)
+            {
+                _missileController = missileController;
+                /*
+                 Other init, going to be used for the Automated-Air Defense System
+
+                 */
+            }
             public TargetingComputer(
                 Vector3D targetLocation,
                 Vector3D shooterLocation,
                 IMyShipController missileController,
-                double cruiseHeight
+                double cruiseHeight,
+                List<IMyThrust> thrusterList
                 )
             {
+               _thrusters = thrusterList;
                _missileController = missileController;
                _sysUpVector = -Vector3D.Normalize(missileController.GetNaturalGravity());
+               _missileMass = _missileController.CalculateShipMass().PhysicalMass;
                _Trajectory = new Trajectory(shooterLocation, targetLocation, cruiseHeight,_sysUpVector);
-                
+               _targetPosition = targetLocation;
             }
             
-        
-            Vector3D _update(Vector3D targetPosition, Vector3D targetVelocity, Vector3D acclCmd ,double certaincy)
+            public Vector3D _update(Vector3D targetPosition, Vector3D targetVelocity, Vector3D acclCmd ,double timeSinceLastIngest ,double certaincy)
             {
                _sysUpVector = -Vector3D.Normalize(_missileController.GetNaturalGravity());
                _missilePosition = _missileController.GetPosition();
@@ -1770,14 +1753,84 @@ namespace IngameScript
                _missileOrient = Vector3D.Normalize(_missilePosition - targetPosition);
                _targetPosition = targetPosition;
                _targetVelocity = targetVelocity;
+               _timeSinceLastIngest = timeSinceLastIngest;
 
-               return new Vector3D(0,0,0); // Temp
-                
+               double cruiseHeight = _Trajectory._update(targetPosition, _missilePosition, _missileController);
+               return acclCmd * _hypersonicCruise();
             }
-            private class Trajectory
+            public bool _calculateViability()
+            {
+               /*
+                Complicated set of equations to check
+                    height and speed is interceptable with missile drag
+                    enough deltaV
+                    distance
+                    etc
+                */
+               return true;
+            }
+
+            /// <summary>
+            /// Determines whether the missile is being launched from
+            /// the ground or from the air
+            /// </summary>
+            private LauncherType determineLauncherType()
+            {
+                double distFromSurface;
+                _missileController.TryGetPlanetElevation(MyPlanetElevation.Surface,out distFromSurface);
+                if (distFromSurface < 50)
+                    return LauncherType.Ground; // On Ground
+                return LauncherType.Air; // In Air over 50 meters.
+            }
+         /// <summary>
+        ///  Calculates the newtons needed from the force of the thruster to maintain sub-hypersonic flight.
+        /// </summary>
+        /// <param name="missileVelocity"> </param>
+        /// <returns></returns>
+        private double _hypersonicCruise()
+        {
+            double missileThrust = this._calculateMissileThrust();
+            Vector3D planetPosition;
+            _missileController.TryGetPlanetPosition(out planetPosition);
+
+            if (planetPosition != new Vector3D())
+            {
+                double height;
+                double alt; // not yet used, but will be used for calculating cruiseSpeed.
+                _missileController.TryGetPlanetElevation(MyPlanetElevation.Surface, out height);
+                _missileController.TryGetPlanetElevation(MyPlanetElevation.Sealevel, out alt);
+                double actualSpeed = Math.Sqrt(Math.Pow(_missileVelocity.X, 2) + Math.Pow(_missileVelocity.Y, 2) + Math.Pow(_missileVelocity.Z, 2)); // Relative to 0,0,0 how fast are we going.
+                double cruiseSpeed = 400; // speed to maintain m/s
+                double cruiseThrust = ((0.5 * _missileMass * Math.Pow(cruiseSpeed, 2)) - (0.5 * _missileMass * Math.Pow(_missileController.GetShipSpeed(), 2))) / (_timeSinceLastIngest);
+                if (cruiseThrust < 0)
+                    return 0; // cant have negative thrust.
+
+                return cruiseThrust;
+            }
+            else
+                return missileThrust / _missileMass;
+
+        }
+        public double _calculateMissileThrust()
+        {
+            double thrust = 0;
+            foreach (var block in _thrusters)
+            {
+                if (block.Closed)
+                    continue;
+                thrust += block.IsFunctional ? block.MaxEffectiveThrust : 0;
+            }
+            return thrust;
+        }
+        
+        private class Trajectory
         {
             private Path _path; // Declare Path as a private member
             private Dictionary<int, Path> _allPaths;
+            private double _cruiseHeight;
+            private double _acceptanceRangeHeight = 200;
+            private PathType _lastStage = PathType.Clear;
+            private PathType _Stage = PathType.Clear;
               
             // Objects
             private class Path
@@ -1943,6 +1996,7 @@ namespace IngameScript
             // Constructor
             public Trajectory(Vector3D shooterLocation, Vector3D targetLocation, double cruiseHeight, Vector3D upVector)
             {
+                _cruiseHeight = cruiseHeight;
                 Path p1 = new Path(PathType.Ascent); // Initialize a clear _path object
                 Path p2 = new Path(PathType.Cruise);
                 Path p3 = new Path(PathType.Descent);
@@ -1950,19 +2004,37 @@ namespace IngameScript
                 _allPaths.Add(2, p2);
                 _allPaths.Add(3, p3);
             }
-            private Path getCurrentPath()
+            private Path getCurrentPath(Vector3D targetPosition, Vector3D currentPosition, double alt)
             {
                 /*
                  Uses the limits for each PathType to determine what part of the trajectory we are in
                 it then returns the path object.
                  */
-
-                return _allPaths[1];
-
+                if (Math.Sqrt(Math.Pow(_cruiseHeight-alt,2)) > _acceptanceRangeHeight || Stage  != PathType.Descent)
+                    {
+                        _lastStage = PathType.Clear;
+                        _Stage = PathType.Ascent;
+                        return _allPaths[1]; // ascent
+                    }
+                else if (Math.Sqrt(Math.Pow(_cruiseHeight-alt,2)) < _acceptanceRangeHeight || _lastStage != PathType.Cruise)  
+                    {
+                        _lastStage = PathType.Ascent;
+                        _Stage = PathType.Cruise;
+                        return _allPaths[2]; // cruise
+                    }
+                else if ( Math.Sqrt(Math.Pow(_cruiseHeight-alt,2)) < _acceptanceRangeHeight || _lastStage == PathType.Ascent)
+                    {
+                        _lastStage = PathType.Cruise;
+                        _Stage = PathType.Descent;
+                        return _allPaths[3]; // descent
+                    }
             }
-            public double _update(Vector3D targetPosition, Vector3D currentPosition)
+            public double _update(Vector3D targetPosition, Vector3D currentPosition, IMyShipController missileController)
             {
-                return 0.0;
+                double alt;
+                missileController.TryGetPlanetElevation(MyPlanetElevation.Sealevel, out alt);
+                Path _currentPath = getCurrentPath(targetPosition, currentPosition, alt);
+                return _currentPath.PathSolve(Vector3D.Distance(targetPosition, currentPosition));
             }
             // Methods
             public void _createPath()
@@ -2013,7 +2085,7 @@ namespace IngameScript
             }
             Vector3D accelCmd = _selectedGuidance.Update(missilePos, missileVel, missileAcceleration, adjustedTargetPos, _targetVel, gravityVec); // Calculate the Unit Vectors that need thrust.
            // return accelCmd * missileAcceleration;
-            return accelCmd * HypersonicCruise(missileVel); // Multiply the units by the force generated to maintain hypersonic flight.
+            return _TargetingComputer._update(adjustedTargetPos,_targetVel,accelCmd,_timeSinceLastIngest,_timeSinceLastLock); // Multiply the units by the force generated to maintain hypersonic flight.
         }
 
         void Control(MatrixD missileMatrix, Vector3D accelCmd, Vector3D gravityVec, Vector3D velocityVec, double mass)
