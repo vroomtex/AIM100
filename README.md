@@ -1,6 +1,5 @@
 # AIM-100 Missile System for Space Engineers
 
-![AIM-100 Missile]([images/aim-100.jpg](https://media.sketchfab.com/models/e52d37a110004e1480465bc6b0943ebc/thumbnails/5b6c87a6134949a0aee9c449b77ce5c2/1024x576.jpeg))
 
 Welcome to the AIM-100 Missile System Repository for Space Engineers! If you're looking to enhance your Space Engineers gameplay with a high-flying missile system capable of achieving sub-hypersonic speeds, you've come to the right place.
 
@@ -54,5 +53,3 @@ The bulk of the code is derived from an old version of Whiplashes [WHAM](https:/
 The AIM-100 Missile System is released under the [MIT License](LICENSE), so feel free to use, modify, and distribute it in your Space Engineers worlds.
 
 We hope you enjoy using the AIM-100 Missile System in Space Engineers. Fly high, strike true, and may your enemies tremble in fear!
-
-![AIM-100 Missile]([images/aim-100.jp](https://media.sketchfab.com/models/e52d37a110004e1480465bc6b0943ebc/thumbnails/5b6c87a6134949a0aee9c449b77ce5c2/1024x576.jpeg)https://media.sketchfab.com/models/e52d37a110004e1480465bc6b0943ebc/thumbnails/5b6c87a6134949a0aee9c449b77ce5c2/1024x576.jpeg)
