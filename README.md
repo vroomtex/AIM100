@@ -41,7 +41,7 @@ We welcome contributions from the Space Engineers community to enhance and impro
 
 ## Issues and Support
 
-If you encounter any issues while using the AIM-100 Missile System or have any questions, please [create an issue](https://github.com/vroomtex/aim-100-missile/issues) on this repository, and I will do my best to assist you.
+If you encounter any issues while using the AIM-100 Missile System or have any questions, please [create an issue](https://github.com/vroomtex/AIM100/issues) on this repository, and I will do my best to assist you.
 
 ## Credits
 
