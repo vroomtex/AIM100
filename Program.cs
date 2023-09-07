@@ -240,7 +240,7 @@ namespace IngameScript
 
 
         enum GuidanceMode : int { BeamRiding = 1, SemiActive = 2, Active = 4, Homing = SemiActive | Active };
-        enum PathType : int { Clear = 0, Ascent = 1, Cruise = 2, Descent = 3};
+        enum PathType : int { Clear = 0, Ascent = 1, Cruise = 2, Descent = 3 };
         enum LauncherType : int { Ground = 0, Air = 1 };
         PID _yawPID = new PID(1, 0, 0, SecondsPerUpdate),
             _pitchPID = new PID(1, 0, 0, SecondsPerUpdate);
@@ -809,7 +809,7 @@ namespace IngameScript
 
                     _guidanceMode = GuidanceMode.SemiActive;
                     if (_TargetingComputer == null)
-                        _TargetingComputer = new TargetingComputer(_targetPos,_missileReference.GetPosition(),_missileReference,_cruiseHeight, _mainThrusters);
+                        _TargetingComputer = new TargetingComputer(_targetPos, _missileReference.GetPosition(), _missileReference, _cruiseHeight, _mainThrusters);
                     _raycastHoming.SetInitialLockParameters(hitPos, _targetVel, offset, _timeSinceLastLock, targetId);
                 }
             }
@@ -1704,7 +1704,7 @@ namespace IngameScript
         // Vector3D origin = _missileReference.TryGetPlanetPosition(out Vector3D planetOrigin);
         // Vector3D upVector = Vector3.Normalize(currentPosition - origin)
         // Vector3D target = (upVector * cruiseHeight) + targetPos?
-       
+
         public class TargetingComputer
         {
             private IMyShipController _missileController;
@@ -1715,11 +1715,12 @@ namespace IngameScript
             private Vector3D _targetPosition;
             private Vector3D _targetVelocity;
             private double _missileMass;
+            private double _cruiseHeight;
             private List<IMyThrust> _thrusters;
             private double _timeSinceLastIngest;
             private Trajectory _Trajectory;
-            
-            
+
+
 
             public TargetingComputer(IMyShipController missileController, List<IMyThrust> mainThrusters)
             {
@@ -1737,37 +1738,45 @@ namespace IngameScript
                 List<IMyThrust> thrusterList
                 )
             {
-               _thrusters = thrusterList;
-               _missileController = missileController;
-               _sysUpVector = -Vector3D.Normalize(missileController.GetNaturalGravity());
-               _missileMass = _missileController.CalculateShipMass().PhysicalMass;
-               _Trajectory = new Trajectory(shooterLocation, targetLocation, cruiseHeight,_sysUpVector);
-               _targetPosition = targetLocation;
+                _thrusters = thrusterList;
+                _missileController = missileController;
+                _sysUpVector = -Vector3D.Normalize(missileController.GetNaturalGravity());
+                _missileMass = _missileController.CalculateShipMass().PhysicalMass;
+                _Trajectory = new Trajectory(shooterLocation, targetLocation, cruiseHeight, _sysUpVector);
+                _targetPosition = targetLocation;
             }
-            
-            public Vector3D _update(Vector3D targetPosition, Vector3D targetVelocity, Vector3D acclCmd ,double timeSinceLastIngest ,double certaincy)
+
+            public void _update(Vector3D targetPosition, Vector3D targetVelocity, double timeSinceLastIngest, double certaincy)
             {
-               _sysUpVector = -Vector3D.Normalize(_missileController.GetNaturalGravity());
-               _missilePosition = _missileController.GetPosition();
-               _missileVelocity = _missileController.GetShipVelocities().LinearVelocity;
-               _missileOrient = Vector3D.Normalize(_missilePosition - targetPosition);
-               _targetPosition = targetPosition;
-               _targetVelocity = targetVelocity;
-               _timeSinceLastIngest = timeSinceLastIngest;
+                _sysUpVector = -Vector3D.Normalize(_missileController.GetNaturalGravity());
+                _missilePosition = _missileController.GetPosition();
+                _missileVelocity = _missileController.GetShipVelocities().LinearVelocity;
+                _missileOrient = Vector3D.Normalize(_missilePosition - targetPosition);
+                _targetPosition = targetPosition;
+                _targetVelocity = targetVelocity;
+                _timeSinceLastIngest = timeSinceLastIngest;
                 // cetaincy will be used if/when multipath calculation is made in order to maximize accuracy.
-               double cruiseHeight = _Trajectory._update(targetPosition, _missilePosition, _missileController);
-               return acclCmd * _hypersonicCruise();
+                _cruiseHeight = _Trajectory._update(targetPosition, _missilePosition, _missileController);
+            }
+            public Vector3D _getAdjustedFlight(Vector3D acclCmd)
+            {
+                return acclCmd * _hypersonicCruise();
+            }
+            public double _getCruiseHeight()
+            {
+
+                return _cruiseHeight;
             }
             public bool _calculateViability()
             {
-               /*
-                Complicated set of equations to check
-                    height and speed is interceptable with missile drag
-                    enough deltaV
-                    distance
-                    etc
-                */
-               return true;
+                /*
+                 Complicated set of equations to check
+                     height and speed is interceptable with missile drag
+                     enough deltaV
+                     distance
+                     etc
+                 */
+                return true;
             }
 
             /// <summary>
@@ -1777,275 +1786,306 @@ namespace IngameScript
             private LauncherType _determineLauncherType()
             {
                 double distFromSurface;
-                _missileController.TryGetPlanetElevation(MyPlanetElevation.Surface,out distFromSurface);
+                _missileController.TryGetPlanetElevation(MyPlanetElevation.Surface, out distFromSurface);
                 if (distFromSurface < 50)
                     return LauncherType.Ground; // On Ground
                 return LauncherType.Air; // In Air over 50 meters.
             }
-         /// <summary>
-        ///  Calculates the newtons needed from the force of the thruster to maintain sub-hypersonic flight.
-        /// </summary>
-        /// <param name="missileVelocity"> </param>
-        /// <returns></returns>
-        private double _hypersonicCruise()
-        {
-            double missileThrust = this._calculateMissileThrust();
-            Vector3D planetPosition;
-            _missileController.TryGetPlanetPosition(out planetPosition);
-
-            if (planetPosition != new Vector3D())
+            /// <summary>
+            ///  Calculates the newtons needed from the force of the thruster to maintain sub-hypersonic flight.
+            /// </summary>
+            /// <param name="missileVelocity"> </param>
+            /// <returns></returns>
+            private double _hypersonicCruise()
             {
-                double height;
-                double alt; // not yet used, but will be used for calculating cruiseSpeed.
-                _missileController.TryGetPlanetElevation(MyPlanetElevation.Surface, out height);
-                _missileController.TryGetPlanetElevation(MyPlanetElevation.Sealevel, out alt);
-                double actualSpeed = Math.Sqrt(Math.Pow(_missileVelocity.X, 2) + Math.Pow(_missileVelocity.Y, 2) + Math.Pow(_missileVelocity.Z, 2)); // Relative to 0,0,0 how fast are we going.
-                double cruiseSpeed = 400; // speed to maintain m/s
-                double cruiseThrust = ((0.5 * _missileMass * Math.Pow(cruiseSpeed, 2)) - (0.5 * _missileMass * Math.Pow(_missileController.GetShipSpeed(), 2))) / (_timeSinceLastIngest);
-                if (cruiseThrust < 0)
-                    return 0; // cant have negative thrust.
+                double missileThrust = _calculateMissileThrust();
+                Vector3D planetPosition;
+                _missileController.TryGetPlanetPosition(out planetPosition);
 
-                return cruiseThrust;
-            }
-            else
-                return missileThrust / _missileMass;
-
-        }
-        public double _calculateMissileThrust()
-        {
-            double thrust = 0;
-            foreach (var block in _thrusters)
-            {
-                if (block.Closed)
-                    continue;
-                thrust += block.IsFunctional ? block.MaxEffectiveThrust : 0;
-            }
-            return thrust;
-        }
-        
-        private class Trajectory
-        {
-            private Dictionary<int, Path> _allPaths = new Dictionary<int, Path>();
-            private double _cruiseHeight;
-            private double _acceptanceRangeHeight = 200;
-            private PathType _lastStage = PathType.Clear;
-            private PathType _Stage = PathType.Clear;
-              
-            // Objects
-            private class Path
-            {
-                private PathType _pathType;
-                private double _trajectoryConstant;
-                private Vector2D V1;
-                private Vector2D V2;
-
-                private Vector3D _upVector;
-                public Vector3D _targetLocation;
-                public Vector3D _startLocation;
-
-                public double __cruiseHeight = 5000;
-
-                public Vector3D V3 { get; private set; }
-                /// <summary>
-                /// Reads V1 and V2 values and outputs V2D targetPoint and V2D startPoint
-                /// </summary>
-                private void slicePoints(Vector3D upVector)
+                if (planetPosition != new Vector3D())
                 {
-                    // Calculate the distance between _targetLocation and _startLocation (a)
-                    double distance = Vector3D.Distance(_targetLocation, _startLocation);
-
-                    // Calculate the height difference (b) (Vector Projection)
-                    Vector3D startToTarget = _targetLocation - _startLocation;
-                    double dotProduct = Vector3D.Dot(startToTarget, upVector);
-                    double magnitudeUpVector = upVector.Length(); // UpVector should be normalized, but it doesnt have to be.
-                    double b = dotProduct / magnitudeUpVector; // Height difference
-                    
-                    // 2D representations
-                    V1 = new Vector2D(0, b); // Target will always be at 0, but can move up and down.
-                    V2 = new Vector2D(distance, 0); // launch/missile location will always change in distance, but height is already accounted for in V1.Y (b).
+                    double height;
+                    double alt; // not yet used, but will be used for calculating cruiseSpeed.
+                    _missileController.TryGetPlanetElevation(MyPlanetElevation.Surface, out height);
+                    _missileController.TryGetPlanetElevation(MyPlanetElevation.Sealevel, out alt);
+                    double actualSpeed = Math.Sqrt(Math.Pow(_missileVelocity.X, 2) + Math.Pow(_missileVelocity.Y, 2) + Math.Pow(_missileVelocity.Z, 2)); // Relative to 0,0,0 how fast are we going.
+                    double cruiseSpeed = 400; // speed to maintain m/s
+                    double cruiseThrust = ((0.5 * _missileMass * Math.Pow(cruiseSpeed, 2)) - (0.5 * _missileMass * Math.Pow(_missileController.GetShipSpeed(), 2))) / (_timeSinceLastIngest);
+                    //  if (cruiseThrust < 0)
+                    //      return 0; // cant have negative thrust.
+                    // Temp
+                    if (height > 5000)
+                        return cruiseThrust;
+                    else
+                        return missileThrust / _missileMass;
+                  //  return missileThrust / _missileMass;//cruiseThrust;
                 }
+                else
+                    return missileThrust / _missileMass;
+
+            }
+            public double _calculateMissileThrust()
+            {
+                double thrust = 0;
+                foreach (var block in _thrusters)
+                {
+                    if (block.Closed)
+                        continue;
+                    thrust += block.IsFunctional ? block.MaxEffectiveThrust : 0;
+                }
+                return thrust;
+            }
+
+            private class Trajectory
+            {
+                private Dictionary<int, Path> _allPaths = new Dictionary<int, Path>();
+                private double _cruiseHeight;
+                private double _acceptanceRangeHeight = 200;
+                private PathType _lastStage = PathType.Clear;
+                private PathType _Stage = PathType.Clear;
+                private Vector3D _planetOrigin;
+                private Vector3D _assumedPlanetRadius;
+                // Objects
+                private class Path
+                {
+                    private PathType _pathType;
+                    private double _trajectoryConstant;
+                    private Vector2D V1;
+                    private Vector2D V2;
+
+                    private Vector3D _upVector;
+                    public Vector3D _targetLocation;
+                    public Vector3D _startLocation;
+
+                    public double __cruiseHeight = 6000;
+
+                    public Vector2D V3 { get; private set; }
+                    /// <summary>
+                    /// Reads V1 and V2 values and outputs V2D targetPoint and V2D startPoint
+                    /// </summary>
+                    private void slicePoints(Vector3D upVector)
+                    {
+                        // Calculate the distance between _targetLocation and _startLocation (a)
+                        double distance = Vector3D.Distance(_targetLocation, _startLocation);
+
+                        // Calculate the height difference (b) (Vector Projection)
+                        Vector3D startToTarget = _targetLocation - _startLocation;
+                        double dotProduct = Vector3D.Dot(startToTarget, upVector);
+                        double magnitudeUpVector = upVector.Length(); // UpVector should be normalized, but it doesnt have to be.
+                        double b = dotProduct / magnitudeUpVector; // Height difference
+
+                        // 2D representations
+                        V1 = new Vector2D(0, b); // Target will always be at 0, but can move up and down.
+                        V2 = new Vector2D(distance, 0); // launch/missile location will always change in distance, but height is already accounted for in V1.Y (b).
+                        V3 = new Vector2D(distance / 2, b / 2);
+                    }
 
 
-                // TODO: Change UpVECTOR to reverse gravity vector
+                    // TODO: Change UpVECTOR to reverse gravity vector
+                    // Constructor
+                    public Path(PathType pathType)
+                    {
+                        _pathType = pathType;
+                        _targetLocation = new Vector3D(0, 0, 0);
+                        _startLocation = new Vector3D(0, 0, 0);
+                    }
+                    public Path(PathType pathType, Vector3D TargetLocation, Vector3D LaunchLocation, Vector3D upVector)
+                    {
+                        _pathType = pathType;
+                        _targetLocation = TargetLocation;
+                        _startLocation = LaunchLocation;
+                        _upVector = upVector;
+                        slicePoints(upVector);
+                    }
+                    public Path(PathType pathType, Vector3D TargetLocation, Vector3D LaunchLocation, Vector3D upVector, double trajectoryConstant)
+                    {
+                        _pathType = pathType;
+                        _targetLocation = TargetLocation;
+                        _startLocation = LaunchLocation;
+                        _trajectoryConstant = trajectoryConstant;
+                        _upVector = upVector;
+                        slicePoints(upVector);
+                    }
+                    // Methods
+                    /// <summary>
+                    ///  Solve the path equation when given 'x'
+                    /// </summary>
+                    /// <returns> height at x</returns>
+                    public double PathSolve(Vector3D targetPosition, Vector3D currentPosition, Vector3D planetOrigin, double planetRadius)
+                    {
+                        double x = Vector3D.Distance(targetPosition, currentPosition) - V1.Y; // Distance - Height Dif = StraightLineDis (x axis)
+                                                                                              // Path Equation = _pathType
+                        double L = 3270;// cruise length/2
+
+
+                        // Calculate the target position above sea level
+                        //Vector3D targetPosition = currentPosition + Vector3D.Normalize(currentPosition - planetOrigin) * (heightFromSeaLevel + __cruiseHeight);
+                        // Calculate the direction vector from the planet origin to the target
+
+                        // Now, targetPositionAboveSurface represents the position where the missile should cruise:
+                        // - It will follow the target's direction.
+                        // - It will maintain a fixed height above the planet's surface (cruiseHeight).
+
+                        switch (_pathType)
+                        {
+                            case PathType.Cruise: // Linear
+                                {
+                                    //   double m = (_trajectoryConstant != 0.0) ? _trajectoryConstant : ((V1.Y - V2.Y) / (V1.X - V2.X));
+                                    // return (m * x) + V2.Y;
+                                    double actualHeight = planetRadius + __cruiseHeight;
+                                    double enemyActualHeight = Vector3D.Distance(targetPosition, planetOrigin);
+                                    double deltaHeight = actualHeight - enemyActualHeight;
+                                    return deltaHeight;
+                                }
+                            case PathType.Ascent: // Parabolic
+                                {
+                                    // Calculate the value for the parabolic case here
+                                    // For example: return a parabolic equation based on x
+                                    Vector2D comp = new Vector2D(V3.X + L, Math.Sqrt(Math.Pow((V3.Y + __cruiseHeight) - V2.Y, 2)));
+                                    double a = ((-__cruiseHeight) / Math.Pow(comp.X - V2.X, 2));
+                                    double b = Math.Pow(x - comp.X, 2);
+                                    double c = __cruiseHeight;
+                                    // return (a * b) + c; //CalculateParabolicValue(x);
+                                    //return __cruiseHeight;
+                                    double actualHeight = planetRadius + __cruiseHeight;
+                                    double enemyActualHeight = Vector3D.Distance(targetPosition, planetOrigin);
+                                    double deltaHeight = actualHeight - enemyActualHeight;
+                                    return deltaHeight;
+                                }
+                            case PathType.Descent://Linear or NonExistent (target above cruise)
+                                {
+                                    if (V1.Y >= __cruiseHeight)
+                                        return 0.0;
+                                    double a = Math.Sqrt(Math.Pow(V1.Y - __cruiseHeight, 2)) / Math.Sqrt(Math.Pow(V1.X - (V3.X - L), 2));
+                                    double b = (x - V1.X);
+                                    double c = V1.Y;
+                                    //  return (a * b) + c;
+                                    return 0;
+                                }
+                            default:
+                                // Handle any other cases or provide a default value
+                                return 0.0;
+                        }
+                    }
+                    /// <summary>
+                    /// Given two angles, calculates the angle change from Angle1 to get to Angle2
+                    /// </summary>
+                    /// <param name="Angle1">The starting angle in radians</param>
+                    /// <param name="Angle2">The target angle in radians</param>
+                    /// <returns>Angle needed to get from Angle1 to Angle2 in radians</returns>
+                    public double GetAngleDelta(double Angle1, double Angle2)
+                    {
+                        double angleDelta = Angle2 - Angle1;
+
+                        // Normalize the angle to be between -π and π (or -180 degrees and 180 degrees)
+                        while (angleDelta < -Math.PI)
+                        {
+                            angleDelta += 2 * Math.PI;
+                        }
+                        while (angleDelta >= Math.PI)
+                        {
+                            angleDelta -= 2 * Math.PI;
+                        }
+
+                        return angleDelta;
+                    }
+                    public void UpdatePathPositions(Vector3D newTargetPosition, Vector3D newStartLocation)
+                    {
+                        _targetLocation = newTargetPosition;
+                        _startLocation = newStartLocation;
+                        slicePoints(_upVector);
+                    }
+                    /// <summary>
+                    /// Updates the set of equations the path uses to calculate y
+                    /// Should not be used unless reusing a cleared path.
+                    /// </summary>
+                    /// <param name="newPathType"></param>
+                    public void UpdatePathType(PathType newPathType)
+                    {
+                        _pathType = newPathType;
+                    }
+
+                    /// <summary>
+                    /// Clears both 2d and 3d data of path
+                    /// give true value to reset path type and upvector
+                    /// </summary>
+                    /// <param name="fullRefresh"> true if PathType & upVector should be reset </param>
+
+                    public void Refresh(bool fullRefresh)
+                    {
+                        _targetLocation = new Vector3D(0, 0, 0);
+                        _startLocation = new Vector3D(0, 0, 0);
+                        V1 = new Vector2D(0, 0);
+                        V2 = new Vector2D(0, 0);
+                        if (fullRefresh)
+                        {
+                            _pathType = PathType.Clear;
+                            _upVector = new Vector3D(0, 0, 0);
+                        }
+
+                    }
+                }
                 // Constructor
-                public Path(PathType pathType)
+                public Trajectory(Vector3D shooterLocation, Vector3D targetLocation, double cruiseHeight, Vector3D upVector)
                 {
-                    _pathType = pathType;
-                    _targetLocation = new Vector3D(0, 0, 0);
-                    _startLocation = new Vector3D(0, 0, 0);
+                    _cruiseHeight = cruiseHeight;
+                    Path p1 = new Path(PathType.Ascent, targetLocation, shooterLocation, upVector); // Initialize a clear _path object
+                    Path p2 = new Path(PathType.Cruise, targetLocation, shooterLocation, upVector);
+                    Path p3 = new Path(PathType.Descent, targetLocation, shooterLocation, upVector);
+                    _allPaths.Add(1, p1);
+                    _allPaths.Add(2, p2);
+                    _allPaths.Add(3, p3);
                 }
-                public Path(PathType pathType ,Vector3D TargetLocation, Vector3D LaunchLocation, Vector3D upVector)
+                private Path getCurrentPath(Vector3D targetPosition, Vector3D currentPosition, double alt)
                 {
-                    _pathType = pathType;
-                    _targetLocation = TargetLocation;
-                    _startLocation = LaunchLocation;
-                    _upVector = upVector;
-                    slicePoints(upVector);
-                }
-                public Path(PathType pathType, Vector3D TargetLocation, Vector3D LaunchLocation,Vector3D upVector, double trajectoryConstant)
-                {
-                    _pathType = pathType;
-                    _targetLocation = TargetLocation;
-                    _startLocation = LaunchLocation;
-                    _trajectoryConstant = trajectoryConstant;
-                    _upVector = upVector;
-                    slicePoints(upVector);
-                }
-                // Methods
-                /// <summary>
-                ///  Solve the path equation when given 'x'
-                /// </summary>
-                /// <returns> height at x</returns>
-                public double PathSolve(Vector3D targetPosition, Vector3D currentPosition)
-                {
-                    double x = Vector3D.Distance(targetPosition, currentPosition) - V1.Y; // Distance - Height Dif = StraightLineDis (x axis)
-                    // Path Equation = _pathType
-                    double L = 3270;// cruise length/2                    
-                    switch (_pathType)
-                    {
-                        case PathType.Cruise: // Linear
-                            {
-                                //   double m = (_trajectoryConstant != 0.0) ? _trajectoryConstant : ((V1.Y - V2.Y) / (V1.X - V2.X));
-                                // return (m * x) + V2.Y;
-                                return __cruiseHeight;
-                            }
-                        case PathType.Ascent: // Parabolic
-                            {
-                                // Calculate the value for the parabolic case here
-                                // For example: return a parabolic equation based on x
-                                Vector2D comp = new Vector2D(V3.X + L, Math.Sqrt(Math.Pow((V3.Y + __cruiseHeight) - V2.Y, 2)));
-                                double a = ((-__cruiseHeight) / Math.Pow(comp.X - V2.X, 2));
-                                double b = Math.Pow(x - comp.X, 2);
-                                double c = __cruiseHeight;
-                                return (a*b)+c; //CalculateParabolicValue(x);
-                            }
-                        case PathType.Descent://Linear or NonExistent (target above cruise)
-                            {
-                                if (V1.Y >= __cruiseHeight)
-                                    return 0.0;
-                                double a = Math.Sqrt(Math.Pow(V1.Y-__cruiseHeight,2))/ Math.Sqrt(Math.Pow(V1.X-(V3.X-L),2));
-                                double b = (x - V1.X);
-                                double c = V1.Y;
-                                return (a*b)+c;
-                            }
-                        default:
-                            // Handle any other cases or provide a default value
-                            return 0.0; 
-                    }
-                }
-                /// <summary>
-                /// Given two angles, calculates the angle change from Angle1 to get to Angle2
-                /// </summary>
-                /// <param name="Angle1">The starting angle in radians</param>
-                /// <param name="Angle2">The target angle in radians</param>
-                /// <returns>Angle needed to get from Angle1 to Angle2 in radians</returns>
-                public double GetAngleDelta(double Angle1, double Angle2)
-                {
-                    double angleDelta = Angle2 - Angle1;
+                    /*
+                     Old: Uses the limits for each PathType to determine what part of the trajectory we are in
+                    it then returns the path object.
 
-                    // Normalize the angle to be between -π and π (or -180 degrees and 180 degrees)
-                    while (angleDelta < -Math.PI)
-                    {
-                        angleDelta += 2 * Math.PI;
-                    }
-                    while (angleDelta >= Math.PI)
-                    {
-                        angleDelta -= 2 * Math.PI;
-                    }
+                    Current: Uses distance from cruise and past stages to determine
+                     current stage.
 
-                    return angleDelta;
-                }
-                public void UpdatePathPositions(Vector3D newTargetPosition, Vector3D newStartLocation)
-                {
-                    _targetLocation = newTargetPosition;
-                    _startLocation = newStartLocation;
-                    slicePoints(_upVector);
-                }
-                /// <summary>
-                /// Updates the set of equations the path uses to calculate y
-                /// Should not be used unless reusing a cleared path.
-                /// </summary>
-                /// <param name="newPathType"></param>
-                public void UpdatePathType(PathType newPathType)
-                {
-                    _pathType = newPathType;
-                }
-
-                /// <summary>
-                /// Clears both 2d and 3d data of path
-                /// give true value to reset path type and upvector
-                /// </summary>
-                /// <param name="fullRefresh"> true if PathType & upVector should be reset </param>
-
-                public void Refresh(bool fullRefresh)
-                {
-                    _targetLocation = new Vector3D(0, 0, 0);
-                    _startLocation = new Vector3D(0, 0, 0);
-                    V1 = new Vector2D(0, 0);
-                    V2 = new Vector2D(0, 0);
-                    if (fullRefresh)
-                     {
-                         _pathType = PathType.Clear;
-                         _upVector = new Vector3D(0, 0, 0);
-                      }
-                    
-                }
-            }
-            // Constructor
-            public Trajectory(Vector3D shooterLocation, Vector3D targetLocation, double cruiseHeight, Vector3D upVector)
-            {
-                _cruiseHeight = cruiseHeight;
-                Path p1 = new Path(PathType.Ascent); // Initialize a clear _path object
-                Path p2 = new Path(PathType.Cruise);
-                Path p3 = new Path(PathType.Descent);
-                _allPaths.Add(1, p1);
-                _allPaths.Add(2, p2);
-                _allPaths.Add(3, p3);
-            }
-            private Path getCurrentPath(Vector3D targetPosition, Vector3D currentPosition, double alt)
-            {
-                /*
-                 Old: Uses the limits for each PathType to determine what part of the trajectory we are in
-                it then returns the path object.
-
-                Current: Uses distance from cruise and past stages to determine
-                 current stage.
-
-                 */
-                if (Math.Sqrt(Math.Pow(_cruiseHeight-alt,2)) > _acceptanceRangeHeight || _Stage  != PathType.Descent)
+                     */
+                    if (Math.Sqrt(Math.Pow(_cruiseHeight - alt, 2)) > _acceptanceRangeHeight || _Stage != PathType.Descent)
                     {
                         _lastStage = PathType.Clear;
                         _Stage = PathType.Ascent;
                         return _allPaths[1]; // ascent
                     }
-                else if (Math.Sqrt(Math.Pow(_cruiseHeight-alt,2)) < _acceptanceRangeHeight || _lastStage != PathType.Cruise)  
+                    else if (Math.Sqrt(Math.Pow(_cruiseHeight - alt, 2)) < _acceptanceRangeHeight || _lastStage != PathType.Cruise)
                     {
                         _lastStage = PathType.Ascent;
                         _Stage = PathType.Cruise;
                         return _allPaths[2]; // cruise
                     }
-                else if ( Math.Sqrt(Math.Pow(_cruiseHeight-alt,2)) < _acceptanceRangeHeight || _lastStage == PathType.Ascent)
+                    else if (Math.Sqrt(Math.Pow(_cruiseHeight - alt, 2)) < _acceptanceRangeHeight || _lastStage == PathType.Ascent)
                     {
                         _lastStage = PathType.Cruise;
                         _Stage = PathType.Descent;
                         return _allPaths[3]; // descent
                     }
-                else
+                    else
                     {
-                    _Stage = PathType.Descent;
-                    return _allPaths[3]; // descent
+                        _Stage = PathType.Descent;
+                        return _allPaths[3]; // descent
                     }
-            }
-            public double _update(Vector3D targetPosition, Vector3D currentPosition, IMyShipController missileController)
-            {
-                double alt;
-                missileController.TryGetPlanetElevation(MyPlanetElevation.Sealevel, out alt);
-                Path _currentPath = getCurrentPath(targetPosition, currentPosition, alt);
-                return _currentPath.PathSolve(targetPosition, currentPosition);
-            }
+                }
+                public double _update(Vector3D targetPosition, Vector3D currentPosition, IMyShipController missileController)
+                {
+                    double alt;
+                    missileController.TryGetPlanetElevation(MyPlanetElevation.Surface, out alt);
+                    Path _currentPath = getCurrentPath(targetPosition, currentPosition, alt);
+
+                    Vector3D planetOrigin;
+                    double heightFromSeaLevel;
+                    missileController.TryGetPlanetElevation(MyPlanetElevation.Sealevel,out heightFromSeaLevel);
+                    missileController.TryGetPlanetPosition(out planetOrigin);
+                    double radius = Vector3D.Distance(currentPosition, planetOrigin) - heightFromSeaLevel;
+                    return _currentPath.PathSolve(targetPosition, currentPosition,planetOrigin, radius);
+                }
 
 
-        }
+            }
         }
         Vector3D HomingGuidance(
             Vector3D missilePos,
@@ -2055,6 +2095,7 @@ namespace IngameScript
             out Vector3D adjustedTargetPos)
         {
             adjustedTargetPos = _targetPos + _targetVel * (_timeSinceLastLock + _timeSinceLastIngest);
+            _TargetingComputer._update(adjustedTargetPos, _targetVel, _timeSinceLastIngest, _timeSinceLastLock); // Multiply the units by the force generated to maintain hypersonic flight.  
             if (_topDownAttack && gravityVec.LengthSquared() > 1e-3 && !_shouldDive)
             {
                 if (VectorMath.AngleBetween(adjustedTargetPos - missilePos, gravityVec) < TopdownDescentAngle)
@@ -2078,14 +2119,15 @@ namespace IngameScript
             if (_shouldCruise && !_topDownAttack) //Factor in limits and piecewise to pick different trajectories depending on flight progress.
             {
                 // Removed for testing temp.
-               // double result = Math.Abs(CalculateCruiseHeight(adjustedTargetPos, _firedFrom, missilePos, _cruiseHeight));
-               // if (result == 0)
-               //     _shouldCruise = false;
-              //  adjustedTargetPos += Vector3D.Normalize(gravityVec) * -result;
+                // double result = Math.Abs(CalculateCruiseHeight(adjustedTargetPos, _firedFrom, missilePos, _cruiseHeight));
+                // if (result == 0)
+                //     _shouldCruise = false;
+                //  adjustedTargetPos += Vector3D.Normalize(gravityVec) * -result;
+                adjustedTargetPos += Vector3D.Normalize(gravityVec) * -_TargetingComputer._getCruiseHeight();
             }
             Vector3D accelCmd = _selectedGuidance.Update(missilePos, missileVel, missileAcceleration, adjustedTargetPos, _targetVel, gravityVec); // Calculate the Unit Vectors that need thrust.
-           // return accelCmd * missileAcceleration;
-            return _TargetingComputer._update(adjustedTargetPos,_targetVel,accelCmd,_timeSinceLastIngest,_timeSinceLastLock); // Multiply the units by the force generated to maintain hypersonic flight.
+            // return accelCmd * missileAcceleration;
+            return _TargetingComputer._getAdjustedFlight(accelCmd);
         }
 
         void Control(MatrixD missileMatrix, Vector3D accelCmd, Vector3D gravityVec, Vector3D velocityVec, double mass)
