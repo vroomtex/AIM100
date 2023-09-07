@@ -50,6 +50,6 @@ The bulk of the code is derived from an old version of Whiplashes [WHAM](https:/
 
 ## License
 
-The AIM-100 Missile System is released under the [MIT License](LICENSE), so feel free to use, modify, and distribute it in your Space Engineers worlds.
+The AIM-100 Missile System is released under the [MIT License](LICENSE.txt), so feel free to use, modify, and distribute it in your Space Engineers worlds.
 
 We hope you enjoy using the AIM-100 Missile System in Space Engineers. Fly high, strike true, and may your enemies tremble in fear!
