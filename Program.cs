@@ -1976,11 +1976,11 @@ namespace IngameScript
                                     double b = (x - V1.X);
                                     double c = V1.Y;
                                     //  return (a * b) + c;
-                                    double actualHeight = planetRadius + _cruiseHeight;
-                                    double enemyActualHeight = Vector3D.Distance(targetPosition, planetOrigin);
-                                    double deltaHeight = actualHeight - enemyActualHeight;
-                                    return deltaHeight;
-                                    //return 0;
+                                  //  double actualHeight = planetRadius + _cruiseHeight;
+                                  //  double enemyActualHeight = Vector3D.Distance(targetPosition, planetOrigin);
+                                  //  double deltaHeight = actualHeight - enemyActualHeight;
+                                   // return deltaHeight;
+                                    return 0;
                                 }
                             default:
                                 // Handle any other cases or provide a default value
