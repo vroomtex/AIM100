@@ -23,10 +23,10 @@ namespace IngameScript
     partial class Program : MyGridProgram
     {
 
-        #region WHAM
-        const string Version = "170.8.6";
-        const string Date = "2023/03/20";
-        const string CompatVersion = "95.0.0";
+        #region AIM-100D
+        const string Version = "100.8.6"; // WHAM Version 170.8.6
+        const string Date = "2023/09/7"; // WHAM Data 03/20/23
+        const string CompatVersion = "95.0.0"; // LAMP 95.0.0
 
 
 
@@ -60,7 +60,7 @@ namespace IngameScript
             _timeSinceLastLock = 0,
             _distanceFromShooter = 0,
             _timeTotal = 0,
-            _cruiseHeight = 5000, // AMRAAM Height (r)
+            _cruiseHeight = 10000, // AMRAAM Height (r) ~4000 meters above the ground in the mountains
             _timeSinceLastIngest = 0;
 
         int
@@ -887,7 +887,7 @@ namespace IngameScript
 
         string GetTitle()
         {
-            return $"Whip's Homing Adv. Missile Script\n(Version {Version} - {Date})\n\nFor use with LAMP v{CompatVersion} or later.\n";
+            return $"AIM-100D Guidance System\n(Version {Version} - {Date})\n\nFor use with LAMP v{CompatVersion} or later.\n";
         }
 
         List<IMyRadioAntenna> _broadcasters = new List<IMyRadioAntenna>();
@@ -1719,7 +1719,7 @@ namespace IngameScript
             private List<IMyThrust> _thrusters;
             private double _timeSinceLastIngest;
             private Trajectory _Trajectory;
-
+            private Vector3D _planetOrigin;
 
 
             public TargetingComputer(IMyShipController missileController, List<IMyThrust> mainThrusters)
@@ -1742,7 +1742,18 @@ namespace IngameScript
                 _missileController = missileController;
                 _sysUpVector = -Vector3D.Normalize(missileController.GetNaturalGravity());
                 _missileMass = _missileController.CalculateShipMass().PhysicalMass;
-                _Trajectory = new Trajectory(shooterLocation, targetLocation, cruiseHeight, _sysUpVector);
+
+                _missileController.TryGetPlanetPosition(out _planetOrigin);
+
+                double heightFromSeaLevel;
+                Vector3D planetOrigin;
+
+                missileController.TryGetPlanetPosition(out planetOrigin);
+                missileController.TryGetPlanetElevation(MyPlanetElevation.Sealevel, out heightFromSeaLevel);
+
+                double radius = Vector3D.Distance(shooterLocation, _planetOrigin) - heightFromSeaLevel;
+
+                _Trajectory = new Trajectory(shooterLocation, targetLocation, cruiseHeight, _sysUpVector, planetOrigin, radius);
                 _targetPosition = targetLocation;
             }
 
@@ -1764,7 +1775,6 @@ namespace IngameScript
             }
             public double _getCruiseHeight()
             {
-
                 return _cruiseHeight;
             }
             public bool _calculateViability()
@@ -1840,11 +1850,13 @@ namespace IngameScript
             {
                 private Dictionary<int, Path> _allPaths = new Dictionary<int, Path>();
                 private double _cruiseHeight;
+                private double _descentAngle = 15;
                 private double _acceptanceRangeHeight = 200;
+                private double _assumedPlanetRadius;
                 private PathType _lastStage = PathType.Clear;
                 private PathType _Stage = PathType.Clear;
                 private Vector3D _planetOrigin;
-                private Vector3D _assumedPlanetRadius;
+
                 // Objects
                 private class Path
                 {
@@ -1857,7 +1869,7 @@ namespace IngameScript
                     public Vector3D _targetLocation;
                     public Vector3D _startLocation;
 
-                    public double __cruiseHeight = 6000;
+                    public double _cruiseHeight;
 
                     public Vector2D V3 { get; private set; }
                     /// <summary>
@@ -1889,23 +1901,27 @@ namespace IngameScript
                         _targetLocation = new Vector3D(0, 0, 0);
                         _startLocation = new Vector3D(0, 0, 0);
                     }
-                    public Path(PathType pathType, Vector3D TargetLocation, Vector3D LaunchLocation, Vector3D upVector)
+                    public Path(PathType pathType, Vector3D TargetLocation, Vector3D LaunchLocation, Vector3D upVector, double cruiseHeight)
                     {
                         _pathType = pathType;
                         _targetLocation = TargetLocation;
                         _startLocation = LaunchLocation;
+                        _cruiseHeight = cruiseHeight;
                         _upVector = upVector;
+
                         slicePoints(upVector);
                     }
-                    public Path(PathType pathType, Vector3D TargetLocation, Vector3D LaunchLocation, Vector3D upVector, double trajectoryConstant)
+                    public Path(PathType pathType, Vector3D TargetLocation, Vector3D LaunchLocation, Vector3D upVector, double cruiseHeight,double trajectoryConstant)
                     {
                         _pathType = pathType;
                         _targetLocation = TargetLocation;
                         _startLocation = LaunchLocation;
                         _trajectoryConstant = trajectoryConstant;
+                        _cruiseHeight = cruiseHeight;
                         _upVector = upVector;
                         slicePoints(upVector);
                     }
+
                     // Methods
                     /// <summary>
                     ///  Solve the path equation when given 'x'
@@ -1932,35 +1948,39 @@ namespace IngameScript
                                 {
                                     //   double m = (_trajectoryConstant != 0.0) ? _trajectoryConstant : ((V1.Y - V2.Y) / (V1.X - V2.X));
                                     // return (m * x) + V2.Y;
-                                    double actualHeight = planetRadius + __cruiseHeight;
-                                    double enemyActualHeight = Vector3D.Distance(targetPosition, planetOrigin);
-                                    double deltaHeight = actualHeight - enemyActualHeight;
+                                    double targetHeight = _cruiseHeight;
+                                    double currentHeight = Vector3D.Distance(currentPosition, planetOrigin) - planetRadius;
+                                    double deltaHeight = targetHeight - currentHeight;
                                     return deltaHeight;
                                 }
                             case PathType.Ascent: // Parabolic
                                 {
                                     // Calculate the value for the parabolic case here
                                     // For example: return a parabolic equation based on x
-                                    Vector2D comp = new Vector2D(V3.X + L, Math.Sqrt(Math.Pow((V3.Y + __cruiseHeight) - V2.Y, 2)));
-                                    double a = ((-__cruiseHeight) / Math.Pow(comp.X - V2.X, 2));
+                                    Vector2D comp = new Vector2D(V3.X + L, Math.Sqrt(Math.Pow((V3.Y + _cruiseHeight) - V2.Y, 2)));
+                                    double a = ((-_cruiseHeight) / Math.Pow(comp.X - V2.X, 2));
                                     double b = Math.Pow(x - comp.X, 2);
-                                    double c = __cruiseHeight;
+                                    double c = _cruiseHeight;
                                     // return (a * b) + c; //CalculateParabolicValue(x);
                                     //return __cruiseHeight;
-                                    double actualHeight = planetRadius + __cruiseHeight;
+                                    double actualHeight = planetRadius + _cruiseHeight;
                                     double enemyActualHeight = Vector3D.Distance(targetPosition, planetOrigin);
                                     double deltaHeight = actualHeight - enemyActualHeight;
                                     return deltaHeight;
                                 }
                             case PathType.Descent://Linear or NonExistent (target above cruise)
                                 {
-                                    if (V1.Y >= __cruiseHeight)
+                                    if (V1.Y >= _cruiseHeight)
                                         return 0.0;
-                                    double a = Math.Sqrt(Math.Pow(V1.Y - __cruiseHeight, 2)) / Math.Sqrt(Math.Pow(V1.X - (V3.X - L), 2));
+                                    double a = Math.Sqrt(Math.Pow(V1.Y - _cruiseHeight, 2)) / Math.Sqrt(Math.Pow(V1.X - (V3.X - L), 2));
                                     double b = (x - V1.X);
                                     double c = V1.Y;
                                     //  return (a * b) + c;
-                                    return 0;
+                                    double actualHeight = planetRadius + _cruiseHeight;
+                                    double enemyActualHeight = Vector3D.Distance(targetPosition, planetOrigin);
+                                    double deltaHeight = actualHeight - enemyActualHeight;
+                                    return deltaHeight;
+                                    //return 0;
                                 }
                             default:
                                 // Handle any other cases or provide a default value
@@ -2026,17 +2046,23 @@ namespace IngameScript
                     }
                 }
                 // Constructor
-                public Trajectory(Vector3D shooterLocation, Vector3D targetLocation, double cruiseHeight, Vector3D upVector)
+                public Trajectory(Vector3D shooterLocation, Vector3D targetLocation, double cruiseHeight, Vector3D upVector, Vector3D planetOrigin, double Altitude)
                 {
+
+                    double radius = Vector3D.Distance(shooterLocation, _planetOrigin) - Altitude;
+
+                    _planetOrigin = planetOrigin;
                     _cruiseHeight = cruiseHeight;
-                    Path p1 = new Path(PathType.Ascent, targetLocation, shooterLocation, upVector); // Initialize a clear _path object
-                    Path p2 = new Path(PathType.Cruise, targetLocation, shooterLocation, upVector);
-                    Path p3 = new Path(PathType.Descent, targetLocation, shooterLocation, upVector);
+                    _assumedPlanetRadius = radius;
+
+                    Path p1 = new Path(PathType.Ascent, targetLocation, shooterLocation, upVector, cruiseHeight); // Initialize a clear _path object
+                    Path p2 = new Path(PathType.Cruise, targetLocation, shooterLocation, upVector, cruiseHeight);
+                    Path p3 = new Path(PathType.Descent, targetLocation, shooterLocation, upVector, cruiseHeight);
                     _allPaths.Add(1, p1);
                     _allPaths.Add(2, p2);
                     _allPaths.Add(3, p3);
                 }
-                private Path getCurrentPath(Vector3D targetPosition, Vector3D currentPosition, double alt)
+                private Path getCurrentPath(Vector3D targetPosition, Vector3D currentPosition, double planetRadius)
                 {
                     /*
                      Old: Uses the limits for each PathType to determine what part of the trajectory we are in
@@ -2046,20 +2072,30 @@ namespace IngameScript
                      current stage.
 
                      */
-                    if (Math.Sqrt(Math.Pow(_cruiseHeight - alt, 2)) > _acceptanceRangeHeight || _Stage != PathType.Descent)
+                    // Since we are adjusting missile height based off of our enemy ant not our own position.
+                    // The missile knows where it is at all times, it knows this because it knows where it isnt.
+                    double targetCruiseHeight = planetRadius + _cruiseHeight; // actual cruise height.
+                    double enemyCruiseHeight = Vector3D.Distance(targetPosition, _planetOrigin);// - planetRadius; // Alt
+                    double deltaHeight = targetCruiseHeight - enemyCruiseHeight;
+
+                    double angleInRadians = VectorMath.AngleBetween(targetPosition- _planetOrigin, currentPosition - _planetOrigin);
+                    double angleInDegrees = angleInRadians * 180 / Math.PI;
+
+                    if (deltaHeight > _acceptanceRangeHeight && _Stage != PathType.Descent)
                     {
                         _lastStage = PathType.Clear;
                         _Stage = PathType.Ascent;
                         return _allPaths[1]; // ascent
                     }
-                    else if (Math.Sqrt(Math.Pow(_cruiseHeight - alt, 2)) < _acceptanceRangeHeight || _lastStage != PathType.Cruise)
+                    else if (deltaHeight < _acceptanceRangeHeight && _lastStage != PathType.Cruise)
                     {
                         _lastStage = PathType.Ascent;
                         _Stage = PathType.Cruise;
                         return _allPaths[2]; // cruise
                     }
-                    else if (Math.Sqrt(Math.Pow(_cruiseHeight - alt, 2)) < _acceptanceRangeHeight || _lastStage == PathType.Ascent)
+                    else if (deltaHeight < _acceptanceRangeHeight && _lastStage == PathType.Ascent && angleInDegrees < _descentAngle)
                     {
+
                         _lastStage = PathType.Cruise;
                         _Stage = PathType.Descent;
                         return _allPaths[3]; // descent
@@ -2078,10 +2114,13 @@ namespace IngameScript
 
                     Vector3D planetOrigin;
                     double heightFromSeaLevel;
-                    missileController.TryGetPlanetElevation(MyPlanetElevation.Sealevel,out heightFromSeaLevel);
+                    missileController.TryGetPlanetElevation(MyPlanetElevation.Sealevel, out heightFromSeaLevel);
                     missileController.TryGetPlanetPosition(out planetOrigin);
                     double radius = Vector3D.Distance(currentPosition, planetOrigin) - heightFromSeaLevel;
-                    return _currentPath.PathSolve(targetPosition, currentPosition,planetOrigin, radius);
+                    return _currentPath.PathSolve(targetPosition, currentPosition, planetOrigin, radius);
+
+                   // Path _currentPath = getCurrentPath(targetPosition, currentPosition,_assumedPlanetRadius);
+                   // return _currentPath.PathSolve(targetPosition, currentPosition, _planetOrigin, _assumedPlanetRadius);
                 }
 
 
