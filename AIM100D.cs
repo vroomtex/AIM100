@@ -55,12 +55,14 @@ namespace IngameScript
         string
             _missileGroupNameTag = "",
             _missileNameTag = "";
+        long
+            _cStreamListeningChannelId = 0;
 
         double
             _timeSinceLastLock = 0,
             _distanceFromShooter = 0,
             _timeTotal = 0,
-            _cruiseHeight = 10000, // AMRAAM Height (r) ~4000 meters above the ground in the mountains
+            _cruiseHeight = 10000, // ~4000 meters above the ground in the mountains. 10,000 meters above sea level.
             _timeSinceLastIngest = 0;
 
         int
@@ -249,6 +251,7 @@ namespace IngameScript
         GuidanceMode _guidanceMode = GuidanceMode.SemiActive;
         RuntimeTracker _runtimeTracker;
         IMyBroadcastListener
+            _broadcastListenerCStream,
             _broadcastListenerHoming,
             _broadcastListenerBeamRiding,
             _broadcastListenerParameters,
@@ -690,6 +693,7 @@ namespace IngameScript
                     if (message.Tag == IgcTagFire)
                     {
                         fireCommanded = true;
+                        _cStreamListeningChannelId = (long)data; // string to long
                     }
                     else if (message.Tag == IgcTagregister)
                     {
@@ -745,7 +749,38 @@ namespace IngameScript
 
                     _raycastHoming.OffsetTargeting = _precisionMode;
                 }
+                while (_broadcastListenerCStream.HasPendingMessage) // AIM-100DG/AIM-100EG
+                {
+                    
+                    object messageData = _broadcastListenerCStream.AcceptMessage().data;
+                    _retask = false; 
+                    if (!(messageData is MyTuple<Vector3D, Vector3D, double>))
+                        continue;
 
+                    var payload = (MyTuple<Vector3D, Vector3D, double>)messageData;
+                    if (_firedFrom == new Vector3D(0, 0, 0))
+                    {
+                        _firedFrom = _missileReference.GetPosition();
+                    }
+                    if (_shooterPosCached == new Vector3D())
+                        _shooterPosCached = _missileReference.GetPosition();
+                    if (_guidanceMode == GuidanceMode.Active && !_retask)
+                        continue;
+                    _retask = false;
+                    Vector3D hitPos = payload.Item1;
+                    Vector3D offset = new Vector3D(0,0,0);
+                    _targetPos = payload.Item1;
+                    _targetVel = payload.Item2;
+                    _timeSinceLastLock = payload.Item3;
+                    long targetId = _cStreamListeningChannelId;
+                    _timeSinceLastIngest = 1.0 / 60.0; // IGC messages are always a tick delayed
+
+                    _guidanceMode = GuidanceMode.SemiActive;
+                    if (_TargetingComputer == null)
+                        _TargetingComputer = new TargetingComputer(_targetPos, _missileReference.GetPosition(), _missileReference, _cruiseHeight, _mainThrusters);
+                    _raycastHoming.SetInitialLockParameters(hitPos, _targetVel, offset, _timeSinceLastLock, targetId);
+                    _shouldCruise = false; // At least for this version.
+                }
                 while (_broadcastListenerBeamRiding.HasPendingMessage)
                 {
                     object messageData = _broadcastListenerBeamRiding.AcceptMessage().Data;
@@ -820,15 +855,21 @@ namespace IngameScript
             if (_broadcastListenersRegistered)
                 return;
 
-            _broadcastListenerHoming = IGC.RegisterBroadcastListener(IgcTagHoming);
-            _broadcastListenerHoming.SetMessageCallback(IgcTagHoming);
+            if (_cStreamListeningChannelId != 0)
+            {
+                _broadcastListenerCStream = IGC.RegisterBroadcastListener(_cStreamListeningChannelId);
+            }
+            else
+            {
+                _broadcastListenerHoming = IGC.RegisterBroadcastListener(IgcTagHoming);
+                _broadcastListenerHoming.SetMessageCallback(IgcTagHoming);
 
-            _broadcastListenerBeamRiding = IGC.RegisterBroadcastListener(IgcTagBeamRiding);
-            _broadcastListenerBeamRiding.SetMessageCallback(IgcTagBeamRiding);
+                _broadcastListenerBeamRiding = IGC.RegisterBroadcastListener(IgcTagBeamRiding);
+                _broadcastListenerBeamRiding.SetMessageCallback(IgcTagBeamRiding);
 
-            _broadcastListenerParameters = IGC.RegisterBroadcastListener(IgcTagParams);
-            _broadcastListenerParameters.SetMessageCallback(IgcTagParams);
-
+                _broadcastListenerParameters = IGC.RegisterBroadcastListener(IgcTagParams);
+                _broadcastListenerParameters.SetMessageCallback(IgcTagParams);
+            }
             _broadcastListenersRegistered = true;
         }
 
@@ -1784,9 +1825,20 @@ namespace IngameScript
                      height and speed is interceptable with missile drag
                      enough deltaV
                      distance
-                     etc
+                     etc.
+
+                First steps of viability, is it gaining distance or closing distance?
+                    -> If so by how much. How interceptable is it.
+
                  */
-                return true;
+                double timeOfFlight; // Find time to intercept.
+                Vector3D predictedTargetPosition = _targetPosition  + (_targetVelocity*timeOfFlight);
+                // If predictedTP is out of range then there is no point in launching.
+                // Especially in cold aspect.
+                double distanceOg = Vector3D.Distance(_targetPosition, _missilePosition);
+                double distancePredicted = Vector3D.Distance(predictedTargetPosition, _missilePosition);
+                bool isColdAspect = ( distanceOg > distancePredicted )
+                return isColdAspect; // among more variables.
             }
 
             /// <summary>
@@ -2062,7 +2114,7 @@ namespace IngameScript
                     _allPaths.Add(2, p2);
                     _allPaths.Add(3, p3);
                 }
-                private Path getCurrentPath(Vector3D targetPosition, Vector3D currentPosition, double planetRadius)
+                private Path getCurrentPath(Vector3D targetPosition, Vector3D currentPosition, double planetRadius, Vector3D gravityVec)
                 {
                     /*
                      Old: Uses the limits for each PathType to determine what part of the trajectory we are in
@@ -2078,9 +2130,9 @@ namespace IngameScript
                     double enemyCruiseHeight = Vector3D.Distance(targetPosition, _planetOrigin);// - planetRadius; // Alt
                     double deltaHeight = targetCruiseHeight - enemyCruiseHeight;
 
-                    double angleInRadians = VectorMath.AngleBetween(targetPosition- _planetOrigin, currentPosition - _planetOrigin);
+                    double angleInRadians = VectorMath.AngleBetween(targetPosition - currentPosition, gravityVec);
                     double angleInDegrees = angleInRadians * 180 / Math.PI;
-
+                    VectorMath.AngleBetween(adjustedTargetPos - missilePos, gravityVec);
                     if (deltaHeight > _acceptanceRangeHeight && _Stage != PathType.Descent)
                     {
                         _lastStage = PathType.Clear;
@@ -2110,13 +2162,13 @@ namespace IngameScript
                 {
                     double alt;
                     missileController.TryGetPlanetElevation(MyPlanetElevation.Surface, out alt);
-                    Path _currentPath = getCurrentPath(targetPosition, currentPosition, alt);
-
                     Vector3D planetOrigin;
                     double heightFromSeaLevel;
                     missileController.TryGetPlanetElevation(MyPlanetElevation.Sealevel, out heightFromSeaLevel);
                     missileController.TryGetPlanetPosition(out planetOrigin);
                     double radius = Vector3D.Distance(currentPosition, planetOrigin) - heightFromSeaLevel;
+                    //Path _currentPath = getCurrentPath(targetPosition, currentPosition, alt, missileController.GetNaturalGravity());
+                    Path _currentPath = getCurrentPath(targetPosition, currentPosition, radius, missileController.GetNaturalGravity());
                     return _currentPath.PathSolve(targetPosition, currentPosition, planetOrigin, radius);
 
                    // Path _currentPath = getCurrentPath(targetPosition, currentPosition,_assumedPlanetRadius);
